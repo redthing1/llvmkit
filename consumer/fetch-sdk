@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+lock=$(realpath "${1:?usage: fetch-sdk TOOLCHAIN.lock}")
+lock_dir=$(dirname "$lock")
+# A project owns this tiny lockfile and may vendor this script independently.
+# shellcheck disable=SC1090
+source "$lock"
+
+: "${TOOLCHAIN_SHA256:?missing TOOLCHAIN_SHA256 in lockfile}"
+: "${TOOLCHAIN_SOURCE:?missing TOOLCHAIN_SOURCE in lockfile}"
+[[ "$TOOLCHAIN_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "TOOLCHAIN_SHA256 must be a lowercase SHA-256 digest" >&2
+  exit 2
+}
+
+cache_base=${XDG_CACHE_HOME:-$HOME/.cache}/toolchain-sdks
+target=$cache_base/$TOOLCHAIN_SHA256
+if [[ -x "$target/bin/clang" && -f "$target/share/cmake/toolchain.cmake" ]]; then
+  printf '%s\n' "$target"
+  exit 0
+fi
+
+command -v zstd >/dev/null || {
+  echo "zstd is required to unpack the SDK archive" >&2
+  exit 1
+}
+mkdir -p "$cache_base"
+scratch=$(mktemp -d "$cache_base/.fetch.XXXXXX")
+trap 'rm -r -- "$scratch"' EXIT
+
+case "$TOOLCHAIN_SOURCE" in
+  http://*|https://*)
+    curl -fL --retry 3 "$TOOLCHAIN_SOURCE" -o "$scratch/archive.tar.zst" ;;
+  /*) cp "$TOOLCHAIN_SOURCE" "$scratch/archive.tar.zst" ;;
+  *) cp "$lock_dir/$TOOLCHAIN_SOURCE" "$scratch/archive.tar.zst" ;;
+esac
+printf '%s  %s\n' "$TOOLCHAIN_SHA256" "$scratch/archive.tar.zst" | sha256sum -c - >&2
+tar --zstd -xf "$scratch/archive.tar.zst" -C "$scratch"
+test -x "$scratch/sdk/bin/clang"
+test -f "$scratch/sdk/share/cmake/toolchain.cmake"
+
+# The SDK directory is installed atomically on the same filesystem. A second
+# concurrent fetch can finish first; either verified copy is equivalent.
+if [[ ! -e "$target" ]]; then
+  mv -T "$scratch/sdk" "$target" 2>/dev/null || true
+fi
+if [[ ! -x "$target/bin/clang" || ! -f "$target/share/cmake/toolchain.cmake" ]]; then
+  echo "SDK cache entry is incomplete: $target" >&2
+  exit 1
+fi
+printf '%s\n' "$target"

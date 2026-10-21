@@ -1,0 +1,28 @@
+--- a/llvm/include/llvm/Support/IntegerInclusiveInterval.h
++++ b/llvm/include/llvm/Support/IntegerInclusiveInterval.h
+@@ -94,9 +94,9 @@
+ /// \returns Expected<IntervalList> containing the parsed intervals on success,
+ ///          or an Error on failure.
+-Expected<IntervalList> parseIntervals(StringRef IntervalStr,
++LLVM_ABI Expected<IntervalList> parseIntervals(StringRef IntervalStr,
+                                       char Separator = ',');
+ 
+ /// Check if a value is contained in any of the intervals.
+-bool contains(ArrayRef<IntegerInclusiveInterval> Intervals, int64_t Value);
++LLVM_ABI bool contains(ArrayRef<IntegerInclusiveInterval> Intervals, int64_t Value);
+ 
+ /// Print intervals to output stream.
+@@ -108,5 +108,5 @@
+ /// or
+ /// ':').
+-void printIntervals(raw_ostream &OS,
++LLVM_ABI void printIntervals(raw_ostream &OS,
+                     ArrayRef<IntegerInclusiveInterval> Intervals,
+                     char Separator = ',');
+@@ -116,5 +116,5 @@
+ /// Merge adjacent/consecutive intervals into single intervals.
+ /// Example: [1-3, 4-6, 8-10] -> [1-6, 8-10].
+-IntervalList
++LLVM_ABI IntervalList
+ mergeAdjacentIntervals(ArrayRef<IntegerInclusiveInterval> Intervals);
+ 

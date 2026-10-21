@@ -1,0 +1,22 @@
+--- a/llvm/tools/remarks-shlib/CMakeLists.txt
++++ b/llvm/tools/remarks-shlib/CMakeLists.txt
+@@ -9,10 +9,17 @@
+     libremarks.cpp
+     )
+ 
+-  if (NOT (BUILD_SHARED_LIBS OR LLVM_LINK_LLVM_DYLIB))
++  if (WIN32 OR NOT (BUILD_SHARED_LIBS OR LLVM_LINK_LLVM_DYLIB))
+     set(LLVM_EXPORTED_SYMBOL_FILE ${CMAKE_CURRENT_SOURCE_DIR}/Remarks.exports)
+   endif()
+ 
+-  add_llvm_library(Remarks SHARED INSTALL_WITH_TOOLCHAIN ${SOURCES})
++  if (WIN32)
++    # Export the complete standalone C API, including the archive import lib.
++    # The shared LLVM C++ DLL does not export these C entry points by default.
++    add_llvm_library(Remarks SHARED DISABLE_LLVM_LINK_LLVM_DYLIB
++                     INSTALL_WITH_TOOLCHAIN ${SOURCES})
++  else()
++    add_llvm_library(Remarks SHARED INSTALL_WITH_TOOLCHAIN ${SOURCES})
++  endif()
+ 
+   if (LLVM_INTEGRATED_CRT_ALLOC AND MSVC)

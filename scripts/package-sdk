@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+kind=${1:?expected llvm or lab}
+sdk=/opt/llvmkit/sdk
+mkdir -p "$sdk/share/llvmkit" /out
+
+# LLVM exports a path to its build-tree test runner even when tests are not
+# installed. Drop this unused setting so the package config is relocatable.
+sed -i '/^set(LLVM_DEFAULT_EXTERNAL_LIT /d' \
+  "$sdk/lib/cmake/llvm/LLVMConfig.cmake"
+
+case "$kind" in
+  llvm) name="llvm-${LLVM_VERSION}-${ABI}-${BUILD_ID}" ;;
+  lab) name="lab-llvm-${LLVM_VERSION}-${ABI}-${BUILD_ID}" ;;
+  *) echo "unknown artifact kind: $kind" >&2; exit 2 ;;
+esac
+
+printf '%s\n' "${LLVM_VERSION%%.*}" > "$sdk/share/llvmkit/llvm-major"
+if [[ "$kind" == lab ]]; then
+  # Upstream installs extra copies of these already-present LLVM tools.
+  for tool in clang llvm-link; do
+    alias_path="$sdk/bin/remill-${tool}-${LLVM_VERSION%%.*}"
+    original_path="$sdk/bin/$tool"
+    if [[ -f "$alias_path" && -f "$original_path" ]] \
+       && cmp -s "$alias_path" "$original_path"; then
+      rm "$alias_path"
+      ln -s "$tool" "$alias_path"
+    fi
+  done
+fi
+python3 - "$sdk/share/llvmkit/manifest.json" "$kind" <<'PY'
+import json
+import os
+import sys
+
+keys = ["ABI", "BASE_IMAGE", "BUILD_ID", "LLVM_ASSERTIONS", "LLVM_PROJECTS",
+        "LLVM_SHA256", "LLVM_TARGETS", "LLVM_VERSION"]
+if sys.argv[2] == "lab":
+    keys += ["GFLAGS_COMMIT", "GLOG_COMMIT", "GOOGLETEST_COMMIT",
+             "LIEF_ANDROID", "LIEF_COMMIT", "LIEF_JSON", "LIEF_MACHO",
+             "LIEF_VERSION", "MBUILD_COMMIT", "REMILL_COMMIT",
+             "REMILL_VERSION", "SLEIGH_COMMIT", "XED_COMMIT"]
+manifest = {"artifact": sys.argv[2], **{key.lower(): os.environ[key] for key in keys}}
+manifest.update(llvm_rtti='ON', llvm_plugins='ON', llvm_link_llvm_dylib='ON')
+with open(sys.argv[1], "w", encoding="utf-8") as output:
+    json.dump(manifest, output, indent=2, sort_keys=True)
+    output.write("\n")
+PY
+
+rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$sdk/share/llvmkit/builder-rpms.txt"
+python3 -m pip freeze | sort > "$sdk/share/llvmkit/builder-pip.txt"
+if [[ "$kind" == lab ]]; then
+  mkdir -p "$sdk/share/llvmkit/patches/remill" "$sdk/share/llvmkit/patches/sleigh" "$sdk/share/llvmkit/patches/lief"
+  cp /patches/remill/*.patch "$sdk/share/llvmkit/patches/remill/"
+  cp /patches/sleigh/*.patch "$sdk/share/llvmkit/patches/sleigh/"
+  for patch_file in /patches/lief/*.patch; do
+    if [[ -f "$patch_file" ]]; then
+      cp "$patch_file" "$sdk/share/llvmkit/patches/lief/"
+    fi
+  done
+fi
+
+# The lab release contains LLVM, Remill, LIEF, and required dependencies.
+tar -C /opt/llvmkit --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+  -cf - sdk | zstd -q -T"${JOBS:-16}" -15 -o "/out/${name}.tar.zst"
+cd /out
+digest=$(sha256sum "${name}.tar.zst" | cut -d ' ' -f1)
+final_name="${name}-${digest:0:12}.tar.zst"
+mv "${name}.tar.zst" "$final_name"
+sha256sum "$final_name" > "${final_name}.sha256"

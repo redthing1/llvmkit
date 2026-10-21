@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+run=0
+if [[ ${1:-} == --run ]]; then run=1; shift; fi
+archive=$(realpath -- "${1:?usage: verify-windows-cross [--run] ARCHIVE.tar.zst [OUTPUT_DIRECTORY]}")
+output=${2:-"$root/.cache/windows-cross-verify"}
+mkdir -p -- "$output"
+output=$(cd -- "$output" && pwd -P)
+scratch=$(mktemp -d)
+trap 'rm -r -- "$scratch"' EXIT
+(cd "$(dirname -- "$archive")" && sha256sum -c "$(basename -- "$archive").sha256")
+tar --zstd -xf "$archive" -C "$scratch"
+mv "$scratch/sdk" "$scratch/relocated sdk with spaces"
+mkdir -p "$scratch/projects/plugins" "$scratch/projects/consumer"
+cp "$root/tests/plugins/CMakeLists.txt" "$root/tests/plugins/passes.cpp" \
+  "$root/tests/plugins/input.c" "$root/tests/plugins/input.ll" "$scratch/projects/plugins/"
+cp "$root/tests/consumer/CMakeLists.txt" "$root/tests/consumer/llvm_consumer.cpp" \
+  "$scratch/projects/consumer/"
+cp "$root/tests/plugins/bundle-smoke.sh" "$scratch/projects/verify.sh"
+images=(docker.io/library/almalinux:9@sha256:3a3fa7f043b142bc8008c8b308d39b47d2c84008addcd52f9f9a7a82d2a90474 docker.io/library/ubuntu:22.04 docker.io/library/debian:12-slim)
+names=(alma9 ubuntu2204 debian12)
+for index in "${!images[@]}"; do
+  mkdir -p "$output/${names[$index]}"
+  podman run --rm --network none --userns=keep-id --user "$(id -u):$(id -g)" \
+    --security-opt label=disable \
+    --mount "type=bind,src=$scratch/relocated sdk with spaces,dst=/sdk moved with spaces,readonly" \
+    --mount "type=bind,src=$scratch/projects,dst=/external project,readonly" \
+    --mount "type=bind,src=$output/${names[$index]},dst=/output" \
+    "${images[$index]}" bash '/external project/verify.sh' '/sdk moved with spaces' '/external project' /output
+done
+if (( run )); then
+  mkdir -p "$output/runtime"
+  "$root/tests/plugins/windows-runtime-smoke.sh" \
+    "$scratch/relocated sdk with spaces/targets/windows-x86_64/llvm" \
+    "$output/ubuntu2204/plugin/LLVMKitPasses.dll" \
+    "$output/ubuntu2204/consumer/llvm_consumer.exe" "$scratch/projects/plugins" "$output/runtime"
+fi

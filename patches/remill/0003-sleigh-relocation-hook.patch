@@ -1,0 +1,19 @@
+diff --git a/dependencies/CMakeLists.txt b/dependencies/CMakeLists.txt
+index d606e5e..d45bd26 100644
+--- a/dependencies/CMakeLists.txt
++++ b/dependencies/CMakeLists.txt
+@@ -92,6 +92,14 @@ if(ENABLE_SLEIGH)
+         "-Dsleigh_BUILD_SLEIGHSPECS:BOOL=ON"
+     )
+ 
++    if(LLVMKIT_SLEIGH_PATCH)
++        ExternalProject_Add_Step(sleigh llvmkit_support_patch
++            COMMAND git -C "<SOURCE_DIR>" apply "${LLVMKIT_SLEIGH_PATCH}"
++            DEPENDEES patch
++            DEPENDERS configure
++        )
++    endif()
++
+     ExternalProject_Add_Step(sleigh ppc_e200_spec_install
+         COMMAND
+             "${CMAKE_COMMAND}"

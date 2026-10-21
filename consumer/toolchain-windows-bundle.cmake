@@ -1,0 +1,10 @@
+# Installed as sdk/share/cmake/toolchain-windows.cmake in the cross package.
+get_filename_component(_llvmkit_prefix "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(ENV{LLVM_NATIVE_TOOLCHAIN} "${_llvmkit_prefix}")
+set(ENV{LLVM_SDK} "${_llvmkit_prefix}/targets/windows-x86_64/llvm")
+set(ENV{WINDOWS_SYSROOT} "${_llvmkit_prefix}/targets/windows-x86_64/sysroot")
+set(CMAKE_MAKE_PROGRAM "${_llvmkit_prefix}/bin/ninja" CACHE FILEPATH "")
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/toolchain-windows-native.cmake")

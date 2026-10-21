@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+build_dir=${1:?expected Remill dependency build directory}
+sdk=${2:?expected SDK prefix}
+license_root=$sdk/share/licenses
+record=$sdk/share/llvmkit/dependency-commits.txt
+mkdir -p "$license_root" "$(dirname "$record")"
+: > "$record"
+
+for name in gflags glog googletest xed mbuild sleigh ghidra; do
+  if [[ "$name" == ghidra ]]; then
+    source_dir=
+    while IFS= read -r candidate; do
+      if [[ -f "$candidate/Ghidra/Features/Decompiler/src/decompile/cpp/sleigh.hh" ]]; then
+        source_dir=$candidate
+        break
+      fi
+    done < <(find "$build_dir" -type d -name ghidrasource-src)
+  else
+    source_dir=$(find "$build_dir" -type d -path "*/src/$name" -print -quit)
+  fi
+  if [[ -z "$source_dir" ]]; then
+    echo "dependency source not found: $name" >&2
+    exit 1
+  fi
+  commit=$(git -C "$source_dir" rev-parse HEAD)
+  [[ -n "$commit" ]] || { echo "missing commit: $name" >&2; exit 1; }
+  printf '%s %s\n' "$name" "$commit" >> "$record"
+  mkdir -p "$license_root/$name"
+  find "$source_dir" -maxdepth 1 -type f \
+    \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) \
+    -exec cp -t "$license_root/$name" {} +
+done

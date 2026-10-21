@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+case "${1:-}" in
+  --build|--install|--open|--version|--help*|-E|-P)
+    exec "$prefix/bin/cmake" "$@" ;;
+  *)
+    exec "$prefix/bin/cmake" -G Ninja \
+      "-DCMAKE_TOOLCHAIN_FILE=$prefix/share/cmake/toolchain-windows.cmake" "$@" ;;
+esac

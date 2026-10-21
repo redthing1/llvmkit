@@ -1,0 +1,52 @@
+diff --git a/dependencies/CMakeLists.txt b/dependencies/CMakeLists.txt
+index d606e5e..aa8d601 100644
+--- a/dependencies/CMakeLists.txt
++++ b/dependencies/CMakeLists.txt
+@@ -39,13 +39,13 @@ endif()
+ 
+ include(superbuild.cmake)
+ 
+-simple_git(https://github.com/gflags/gflags 52e94563eba1968783864942fedf6e87e3c611f4
++simple_git(https://github.com/gflags/gflags ${LLVMKIT_GFLAGS_COMMIT}
+ )
+-simple_git(https://github.com/google/glog v0.7.1
++simple_git(https://github.com/google/glog ${LLVMKIT_GLOG_COMMIT}
+     "-DGFLAGS_USE_TARGET_NAMESPACE:STRING=ON"
+     "-DBUILD_TESTING:STRING=OFF"
+ )
+-simple_git(https://github.com/google/googletest v1.17.0
++simple_git(https://github.com/google/googletest ${LLVMKIT_GOOGLETEST_COMMIT}
+     "-Dgtest_force_shared_crt:STRING=ON"
+     "-DGFLAGS_USE_TARGET_NAMESPACE:STRING=ON"
+ )
+@@ -84,7 +84,7 @@ if(ENABLE_SLEIGH)
+ 
+     string(REPLACE ";" "\\;" sleigh_patches_arg "${sleigh_patches}")
+ 
+-    simple_git(https://github.com/lifting-bits/sleigh 7c6b742
++    simple_git(https://github.com/lifting-bits/sleigh ${LLVMKIT_SLEIGH_COMMIT}
+         "-Dsleigh_ADDITIONAL_PATCHES:STRING=${sleigh_patches_arg}"
+         "-Dsleigh_ENABLE_TESTS:BOOL=OFF"
+         "-Dsleigh_RELEASE_TYPE:STRING=HEAD"
+diff --git a/dependencies/xed.cmake b/dependencies/xed.cmake
+index 69877bc..0e20228 100644
+--- a/dependencies/xed.cmake
++++ b/dependencies/xed.cmake
+@@ -52,7 +52,7 @@ ExternalProject_Add(mbuild
+     GIT_REPOSITORY
+         "https://github.com/intelxed/mbuild"
+     GIT_TAG
+-        "v2024.11.04"
++        "${LLVMKIT_MBUILD_COMMIT}"
+     GIT_PROGRESS
+         ON
+     CONFIGURE_COMMAND
+@@ -69,7 +69,7 @@ ExternalProject_Add(xed
+     GIT_REPOSITORY
+         "https://github.com/intelxed/xed"
+     GIT_TAG
+-        "v2025.06.08"
++        "${LLVMKIT_XED_COMMIT}"
+     GIT_PROGRESS
+         ON
+     CMAKE_CACHE_ARGS

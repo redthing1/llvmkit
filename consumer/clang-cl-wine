@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${LLVM_SDK:?Set LLVM_SDK to the extracted Windows SDK prefix}"
+: "${MSVC_WINE_ROOT:?Set MSVC_WINE_ROOT to the installed msvc-wine toolchain}"
+sdk=$(cd -- "$LLVM_SDK" && pwd -P)
+msvc=$(cd -- "$MSVC_WINE_ROOT" && pwd -P)
+# The upstream environment script expects unset optional shell variables.
+set +u
+source "$msvc/bin/x64/msvcenv.sh"
+set -u
+export WINEPATH="Z:${sdk//\//\\}\\bin;$WINEPATH"
+export WINE_MSVC_STDOUT_SED='/^Note: including file: /{ s/[zZ]:([\\/])/\1/g; s,\\,/,g; }'
+exec "$msvc/bin/x64/wine-msvc.sh" "$sdk/bin/clang-cl.exe" "$@"

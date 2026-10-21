@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+archive=$(realpath -- "${1:?usage: verify-sdk-wine ARCHIVE.zip [OUTPUT_DIRECTORY]}")
+output=${2:-"$root/.cache/wine-verify"}
+: "${MSVC_WINE_IMAGE:?Set MSVC_WINE_IMAGE to a Podman image with msvc-wine installed at /opt/msvc}"
+image=$MSVC_WINE_IMAGE
+mkdir -p "$output"
+output=$(cd -- "$output" && pwd -P)
+scratch=$(mktemp -d)
+trap 'rm -r -- "$scratch"' EXIT
+(
+  cd -- "$(dirname -- "$archive")"
+  sha256sum -c -- "$(basename -- "$archive").sha256"
+)
+(
+  cd -- "$scratch"
+  cmake -E tar xf "$archive"
+)
+podman run --rm --userns=keep-id --user "$(id -u):$(id -g)" \
+  --security-opt label=disable \
+  --mount "type=bind,src=$scratch/sdk,dst=/sdk,readonly" \
+  --mount "type=bind,src=$root,dst=/repo,readonly" \
+  --mount "type=bind,src=$output,dst=/output" \
+  -e LLVM_SDK=/sdk -e MSVC_WINE_ROOT=/opt/msvc \
+  -e WINEPREFIX=/tmp/llvmkit-wine -e WINEDEBUG=-all \
+  "$image" bash /repo/tests/plugins/wine-smoke.sh /repo /output

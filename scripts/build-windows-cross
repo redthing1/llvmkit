@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+cd "$root"
+set -a
+source "$root/versions.env"
+source "$root/windows-cross.env"
+set +a
+[[ $# -eq 2 ]] || { echo 'usage: build-windows-cross LINUX_ARCHIVE WINDOWS_ARCHIVE' >&2; exit 2; }
+linux_archive=$(realpath -- "$1")
+windows_archive=$(realpath -- "$2")
+for archive in "$linux_archive" "$windows_archive"; do
+  (cd "$(dirname -- "$archive")" && sha256sum -c "$(basename -- "$archive").sha256")
+done
+CROSS_LINUX_ARCHIVE=$(basename -- "$linux_archive")
+CROSS_LINUX_SHA256=$(sha256sum "$linux_archive" | cut -d ' ' -f1)
+CROSS_WINDOWS_ARCHIVE=$(basename -- "$windows_archive")
+CROSS_WINDOWS_SHA256=$(sha256sum "$windows_archive" | cut -d ' ' -f1)
+export CROSS_LINUX_ARCHIVE CROSS_LINUX_SHA256 CROSS_WINDOWS_ARCHIVE CROSS_WINDOWS_SHA256
+cache=${WINDOWS_CROSS_CACHE:-"$root/.cache/windows-cross"}
+mkdir -p -- "$cache/downloads" "$root/dist"
+cache=$(cd -- "$cache" && pwd -P)
+scratch=$(mktemp -d "$cache/package.XXXXXX")
+trap 'rm -r -- "$scratch"' EXIT
+tar --zstd -xf "$linux_archive" -C "$scratch"
+sdk="$scratch/sdk"
+mkdir -p "$scratch/windows" "$sdk/libexec/cmake" "$sdk/libexec/ninja" "$sdk/targets/windows-x86_64"
+(cd "$scratch/windows" && cmake -E tar xf "$windows_archive")
+mv "$scratch/windows/sdk" "$sdk/targets/windows-x86_64/llvm"
+python3 - "$sdk" <<'PY'
+import json, os, sys
+from pathlib import Path
+sdk = Path(sys.argv[1])
+for prefix, abi in [(sdk, os.environ['ABI']),
+                    (sdk / 'targets/windows-x86_64/llvm', 'windows-x86_64-msvc')]:
+    manifest = json.loads((prefix / 'share/llvmkit/manifest.json').read_text(encoding='utf-8-sig'))
+    expected = dict(artifact='llvm', abi=abi, llvm_version=os.environ['LLVM_VERSION'],
+                    llvm_sha256=os.environ['LLVM_SHA256'],
+                    llvm_projects=os.environ['LLVM_PROJECTS'],
+                    llvm_assertions=os.environ['LLVM_ASSERTIONS'],
+                    llvm_rtti='ON', llvm_plugins='ON')
+    for key, value in expected.items():
+        if manifest.get(key) != value:
+            raise SystemExit(f'Incompatible {abi} archive: {key} must be {value}')
+PY
+
+fetch() {
+  local url=$1 digest=$2 path=$3
+  if [[ ! -f "$path" ]]; then
+    curl -fL --retry 3 "$url" -o "$path.part"
+    mv -- "$path.part" "$path"
+  fi
+  printf '%s  %s\n' "$digest" "$path" | sha256sum -c -
+}
+fetch "https://github.com/Kitware/CMake/releases/download/v$CROSS_CMAKE_VERSION/cmake-$CROSS_CMAKE_VERSION-linux-x86_64.tar.gz" \
+  "$CROSS_CMAKE_SHA256" "$cache/downloads/cmake.tar.gz"
+fetch "https://github.com/ninja-build/ninja/releases/download/v$CROSS_NINJA_VERSION/ninja-linux.zip" \
+  "$CROSS_NINJA_SHA256" "$cache/downloads/ninja.zip"
+fetch "https://github.com/Jake-Shadle/xwin/releases/download/$CROSS_XWIN_VERSION/xwin-$CROSS_XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz" \
+  "$CROSS_XWIN_SHA256" "$cache/downloads/xwin.tar.gz"
+fetch "$CROSS_MANIFEST_URL" "$CROSS_MANIFEST_SHA256" "$cache/downloads/vs-manifest.json"
+fetch "https://raw.githubusercontent.com/ninja-build/ninja/v$CROSS_NINJA_VERSION/COPYING" \
+  "$CROSS_NINJA_LICENSE_SHA256" "$cache/downloads/ninja-license.txt"
+fetch "$CROSS_MSVC_LICENSE_URL" "$CROSS_MSVC_LICENSE_SHA256" "$cache/downloads/microsoft-buildtools-license.html"
+fetch "$CROSS_WINSDK_LICENSE_URL" "$CROSS_WINSDK_LICENSE_SHA256" "$cache/downloads/windows-sdk-eula.msi"
+
+if [[ ! -f "$cache/sysroot/.llvmkit-complete" ]]; then
+  mkdir -p "$cache/xwin"
+  tar -xzf "$cache/downloads/xwin.tar.gz" --strip-components=1 -C "$cache/xwin"
+  # xwin expects a channel manifest. Seed its package-manifest cache with our
+  # verified immutable VS manifest instead of following the changing channel.
+  mkdir -p "$cache/xwin-cache/dl"
+  cp "$cache/downloads/vs-manifest.json" "$cache/xwin-cache/dl/pkg_manifest_$CROSS_MANIFEST_SHA256.vsman"
+  python3 - "$cache/downloads/channel.json" "$cache/downloads/vs-manifest.json" <<'PY'
+import json, os, sys
+from pathlib import Path
+payload = dict(fileName='VisualStudio.vsman', url=os.environ['CROSS_MANIFEST_URL'],
+               sha256=os.environ['CROSS_MANIFEST_SHA256'], size=Path(sys.argv[2]).stat().st_size)
+channel = dict(channelItems=[dict(id='Microsoft.VisualStudio.Manifests.VisualStudio',
+                                 version='17', type='Manifest', payloads=[payload])])
+Path(sys.argv[1]).write_text(json.dumps(channel) + '\n')
+PY
+  "$cache/xwin/xwin" --accept-license --manifest "$cache/downloads/channel.json" \
+    --cache-dir "$cache/xwin-cache" --crt-version "$CROSS_CRT_PACKAGE" \
+    --sdk-version "$CROSS_WINSDK_PACKAGE" splat --output "$cache/sysroot"
+  printf '%s\n' "$CROSS_MANIFEST_SHA256 $CROSS_XWIN_SHA256 $CROSS_CRT_PACKAGE $CROSS_WINSDK_PACKAGE" \
+    > "$cache/sysroot/.llvmkit-complete"
+fi
+expected_sysroot="$CROSS_MANIFEST_SHA256 $CROSS_XWIN_SHA256 $CROSS_CRT_PACKAGE $CROSS_WINSDK_PACKAGE"
+if [[ $(cat "$cache/sysroot/.llvmkit-complete") != "$expected_sysroot" ]]; then
+  echo 'Sysroot cache inputs changed; use a fresh WINDOWS_CROSS_CACHE directory.' >&2
+  exit 1
+fi
+
+if [[ ! -f "$cache/host-runtime/.llvmkit-complete" ]]; then
+  mkdir -p "$cache/host-runtime"
+  podman run --rm --entrypoint /bin/sh "$CROSS_RUNTIME_IMAGE" -c \
+    'tar -hcf - -C /usr/lib64 libstdc++.so.6 libgcc_s.so.1 libz.so.1 -C /usr/share/licenses libgcc zlib' \
+    | tar -xf - -C "$cache/host-runtime"
+  printf '%s\n' "$CROSS_RUNTIME_IMAGE" > "$cache/host-runtime/.llvmkit-complete"
+fi
+if [[ $(cat "$cache/host-runtime/.llvmkit-complete") != "$CROSS_RUNTIME_IMAGE" ]]; then
+  echo 'Host runtime cache inputs changed; use a fresh WINDOWS_CROSS_CACHE directory.' >&2
+  exit 1
+fi
+
+cp -a "$cache/sysroot" "$sdk/targets/windows-x86_64/sysroot"
+rm -f -- "$sdk/targets/windows-x86_64/sysroot/.llvmkit-complete"
+tar -xzf "$cache/downloads/cmake.tar.gz" --strip-components=1 -C "$sdk/libexec/cmake"
+mkdir -p "$sdk/share/licenses/microsoft" "$sdk/share/licenses/ninja" "$sdk/share/licenses/host-runtime"
+cp -a "$cache/host-runtime/"*.so.* "$sdk/lib/"
+cp -a "$cache/host-runtime/libgcc" "$cache/host-runtime/zlib" "$sdk/share/licenses/host-runtime/"
+cp "$cache/downloads/ninja-license.txt" "$sdk/share/licenses/ninja/LICENSE.txt"
+cp "$cache/downloads/microsoft-buildtools-license.html" "$sdk/share/licenses/microsoft/BuildTools2022.html"
+cp "$cache/downloads/windows-sdk-eula.msi" "$sdk/share/licenses/microsoft/WindowsSDK-EULA.msi"
+(cd "$sdk/libexec/ninja" && cmake -E tar xf "$cache/downloads/ninja.zip")
+chmod +x "$sdk/libexec/ninja/ninja"
+for tool in cmake ctest cpack ninja; do
+  cp "$root/scripts/linux-build-tool-wrapper" "$sdk/bin/$tool"
+  chmod +x "$sdk/bin/$tool"
+done
+cp "$root/consumer/toolchain-windows-native.cmake" "$sdk/share/cmake/"
+cp "$root/consumer/toolchain-windows-bundle.cmake" "$sdk/share/cmake/toolchain-windows.cmake"
+cp "$root/consumer/cmake-windows" "$sdk/bin/cmake-windows"
+chmod +x "$sdk/bin/cmake-windows"
+cp "$root/windows-cross.env" "$sdk/share/llvmkit/windows-cross.env"
+# Preserve the downloaded package manifest, including each payload's SHA-256.
+cp "$cache/downloads/vs-manifest.json" "$sdk/share/llvmkit/microsoft-package-manifest.json"
+python3 - "$sdk" "$root/windows-cross.env" <<'PY'
+import json, os, sys
+from pathlib import Path
+sdk = Path(sys.argv[1])
+keys = [line.split('=', 1)[0] for line in Path(sys.argv[2]).read_text().splitlines()
+        if line.startswith('CROSS_')]
+keys += ['CROSS_LINUX_ARCHIVE', 'CROSS_LINUX_SHA256',
+         'CROSS_WINDOWS_ARCHIVE', 'CROSS_WINDOWS_SHA256']
+manifest = {key.lower(): os.environ[key] for key in keys}
+manifest.update(artifact='llvm-windows-cross', llvm_version=os.environ['LLVM_VERSION'],
+                host=os.environ['ABI'], target='windows-x86_64-msvc')
+(sdk / 'share/llvmkit/windows-cross.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+# Every packaged symlink must stay within this relocated SDK.
+for path in sdk.rglob('*'):
+    if path.is_symlink():
+        target = path.resolve(strict=True)
+        if not target.is_relative_to(sdk.resolve()):
+            raise SystemExit(f'Nonportable symlink: {path} -> {target}')
+PY
+build_id=$({
+  printf '%s\n' "$LLVM_VERSION" "$ABI" "$CROSS_LINUX_SHA256" "$CROSS_WINDOWS_SHA256"
+  sha256sum windows-cross.env scripts/build-windows-cross \
+    scripts/linux-build-tool-wrapper consumer/toolchain-windows-native.cmake \
+    consumer/toolchain-windows-bundle.cmake consumer/cmake-windows
+  } \
+  | sha256sum | cut -c 1-12)
+name="llvm-${LLVM_VERSION}-${ABI}-windows-cross-${build_id}"
+tar -C "$scratch" --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+  -cf - sdk | zstd -q -T"${JOBS:-8}" -15 -o "$scratch/$name.tar.zst"
+digest=$(sha256sum "$scratch/$name.tar.zst" | cut -d ' ' -f1)
+name="$name-${digest:0:12}.tar.zst"
+mv "$scratch/"*.tar.zst "$root/dist/$name"
+(cd "$root/dist" && sha256sum "$name" > "$name.sha256")
+echo "Built $root/dist/$name"

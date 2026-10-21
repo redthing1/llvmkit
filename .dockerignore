@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!consumer/
+consumer/**
+!consumer/toolchain.cmake
+!scripts/
+scripts/**
+!scripts/package-sdk
+!scripts/collect-remill-deps
+!patches/
+!patches/**

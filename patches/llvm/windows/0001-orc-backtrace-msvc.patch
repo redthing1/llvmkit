@@ -1,0 +1,11 @@
+--- a/llvm/include/llvm/ExecutionEngine/Orc/BacktraceTools.h
++++ b/llvm/include/llvm/ExecutionEngine/Orc/BacktraceTools.h
+@@ -78,7 +78,7 @@
+ 
+   /// Given a backtrace, try to symbolicate any unsymbolicated lines using the
+   /// symbol addresses in the dumped symbol table.
+-  LLVM_ABI std::string symbolicate(StringRef Backtrace);
++  std::string symbolicate(StringRef Backtrace);
+ 
+ private:
+   DumpedSymbolTable(std::unique_ptr<MemoryBuffer> SymtabBuffer);

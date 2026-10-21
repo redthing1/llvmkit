@@ -1,0 +1,64 @@
+diff --git a/support/Support.cpp b/support/Support.cpp
+index 9d7ecd2..8bb8a0f 100644
+--- a/support/Support.cpp
++++ b/support/Support.cpp
+@@ -10,6 +10,13 @@
+ 
+ #include "sleigh/SpecFilePaths.h"
+ 
++#include <cstdlib>
++#include <system_error>
++
++#ifdef __linux__
++#include <dlfcn.h>
++#endif
++
+ namespace sleigh {
+ 
+ namespace {
+@@ -44,14 +51,37 @@ FindSpecFileInSearchPath(std::string_view file_name,
+ 
+ } // namespace
+ 
+-const std::vector<std::filesystem::path> gDefaultSearchPaths = {
+-    // Derived from the installation
+-    kSleighFullSpecInstallDir,
+-    // Derived from the build
+-    kSleighSpecBuildDir,
+-    // Common install locations
+-    "/usr/local/share/sleigh/specfiles", "/usr/share/sleigh/specfiles",
+-    "/share/sleigh/specfiles"};
++const std::vector<std::filesystem::path> gDefaultSearchPaths = [] {
++  std::vector<std::filesystem::path> paths;
++  if (const char *spec_dir = std::getenv("SLEIGH_SPECS_DIR");
++      spec_dir && *spec_dir) {
++    paths.emplace_back(spec_dir);
++  }
++#ifdef __linux__
++  Dl_info llvm_info{};
++  if (void *version = dlsym(RTLD_DEFAULT, "LLVMGetVersion");
++      version && dladdr(version, &llvm_info) && llvm_info.dli_fname) {
++    const std::filesystem::path library(llvm_info.dli_fname);
++    if (library.is_absolute()) {
++      paths.emplace_back(library.parent_path().parent_path() / "share" /
++                         "sleigh" / "specfiles");
++    }
++  }
++  std::error_code error;
++  const auto executable = std::filesystem::read_symlink("/proc/self/exe", error);
++  if (!error) {
++    paths.emplace_back(executable.parent_path().parent_path() / "share" /
++                       "sleigh" / "specfiles");
++  }
++#endif
++  // Preserve upstream search paths for standalone tools.
++  paths.emplace_back(kSleighFullSpecInstallDir);
++  paths.emplace_back(kSleighSpecBuildDir);
++  paths.emplace_back("/usr/local/share/sleigh/specfiles");
++  paths.emplace_back("/usr/share/sleigh/specfiles");
++  paths.emplace_back("/share/sleigh/specfiles");
++  return paths;
++}();
+ 
+ std::optional<std::filesystem::path>
+ FindSpecFile(std::string_view file_name,

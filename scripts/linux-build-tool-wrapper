@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+prefix=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+tool=$(basename -- "${BASH_SOURCE[0]}")
+export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+case "$tool" in
+  cmake|ctest|cpack) exec "$prefix/libexec/cmake/bin/$tool" "$@" ;;
+  ninja) exec "$prefix/libexec/ninja/ninja" "$@" ;;
+  *) echo "Unknown bundled tool: $tool" >&2; exit 2 ;;
+esac

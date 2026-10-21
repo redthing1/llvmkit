@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+cd "$root"
+# shellcheck source=versions.env
+source ./versions.env
+
+usage() {
+  cat <<'USAGE'
+usage: ./llvmkit build [llvm|lab|all]
+       ./llvmkit build windows-cross [LINUX_ARCHIVE WINDOWS_ARCHIVE]
+       ./llvmkit verify ARCHIVE.tar.zst|all
+       ./llvmkit verify --run WINDOWS_CROSS_ARCHIVE.tar.zst
+       ./llvmkit list
+
+Linux builds require rootless Podman. Parallelism follows CPU and available RAM.
+JOBS sets the compile limit.
+LLVM_JOBS, REMILL_JOBS, and LIEF_JOBS override individual build stages.
+Archives and SHA-256 files are written to dist/.
+USAGE
+}
+
+case "${1:-}" in
+  ''|-h|--help|help) usage; exit 0 ;;
+esac
+
+select_archive() {
+  if [[ $# -ne 1 ]]; then
+    echo 'Expected one matching archive in dist/; supply the Linux and Windows archive paths explicitly.' >&2
+    exit 1
+  fi
+  printf '%s\n' "$1"
+}
+
+default_jobs() {
+  local cpus memory_jobs
+  cpus=$(nproc)
+  memory_jobs=$(awk '/^MemAvailable:/ {print int($2 / 2097152)}' /proc/meminfo)
+  if [[ -n "$memory_jobs" && "$memory_jobs" -lt "$cpus" ]]; then cpus=$memory_jobs; fi
+  if (( cpus < 1 )); then cpus=1; fi
+  printf '%s\n' "$cpus"
+}
+
+llvm_fingerprint=$(
+  {
+    printf '%s\n' "$BASE_IMAGE" "$LLVM_VERSION" "$LLVM_SHA256" \
+      "$LLVM_TARGETS" "$LLVM_PROJECTS" "$LLVM_ASSERTIONS" "$ABI"
+    sed -n '1,/^FROM llvm-build AS remill-build/p' Dockerfile
+    sed -n '/^FROM llvm-build AS llvm-package/,/^FROM remill-build AS lab-build/p' Dockerfile
+    sha256sum consumer/toolchain.cmake scripts/package-sdk
+  } | sha256sum | cut -c 1-12
+)
+lab_fingerprint=$(
+  {
+    sha256sum versions.env Dockerfile consumer/toolchain.cmake scripts/package-sdk \
+      scripts/collect-remill-deps patches/remill/*.patch patches/sleigh/*.patch
+    find patches/lief -type f -print0 | sort -z | xargs -0 -r sha256sum
+  } | sha256sum | cut -c 1-12
+)
+jobs=${JOBS:-$(default_jobs)}
+llvm_jobs=${LLVM_JOBS:-$jobs}
+remill_jobs=${REMILL_JOBS:-$jobs}
+lief_jobs=${LIEF_JOBS:-$jobs}
+
+build_one() {
+  local kind=$1
+  local build_id=$lab_fingerprint
+  if [[ "$kind" == llvm ]]; then build_id=$llvm_fingerprint; fi
+  local value
+  for value in "$llvm_jobs" "$remill_jobs" "$lief_jobs"; do
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || {
+      echo 'Build job limits must be positive integers.' >&2
+      exit 2
+    }
+  done
+  mkdir -p dist
+  podman build --layers \
+    --platform linux/amd64 \
+    --target "${kind}-artifact" \
+    --output "type=local,dest=${root}/dist" \
+    --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+    --build-arg "LLVM_VERSION=${LLVM_VERSION}" \
+    --build-arg "LLVM_SHA256=${LLVM_SHA256}" \
+    --build-arg "LLVM_TARGETS=${LLVM_TARGETS}" \
+    --build-arg "LLVM_PROJECTS=${LLVM_PROJECTS}" \
+    --build-arg "LLVM_ASSERTIONS=${LLVM_ASSERTIONS}" \
+    --build-arg "REMILL_VERSION=${REMILL_VERSION}" \
+    --build-arg "REMILL_COMMIT=${REMILL_COMMIT}" \
+    --build-arg "LIEF_VERSION=${LIEF_VERSION}" \
+    --build-arg "LIEF_COMMIT=${LIEF_COMMIT}" \
+    --build-arg "LIEF_MACHO=${LIEF_MACHO}" \
+    --build-arg "LIEF_ANDROID=${LIEF_ANDROID}" \
+    --build-arg "LIEF_JSON=${LIEF_JSON}" \
+    --build-arg "GFLAGS_COMMIT=${GFLAGS_COMMIT}" \
+    --build-arg "GLOG_COMMIT=${GLOG_COMMIT}" \
+    --build-arg "GOOGLETEST_COMMIT=${GOOGLETEST_COMMIT}" \
+    --build-arg "XED_COMMIT=${XED_COMMIT}" \
+    --build-arg "MBUILD_COMMIT=${MBUILD_COMMIT}" \
+    --build-arg "SLEIGH_COMMIT=${SLEIGH_COMMIT}" \
+    --build-arg "ABI=${ABI}" \
+    --build-arg "BUILD_ID=${build_id}" \
+    --build-arg "JOBS=${llvm_jobs}" \
+    --build-arg "REMILL_JOBS=${remill_jobs}" \
+    --build-arg "LIEF_JOBS=${lief_jobs}" \
+    .
+}
+
+case "${1:-}" in
+  build)
+    case "${2:-all}" in
+      llvm|lab|all)
+        [[ $# -le 2 ]] || { usage; exit 2; }
+        case "${2:-all}" in
+          llvm) build_one llvm ;;
+          lab) build_one lab ;;
+          all) build_one llvm; build_one lab ;;
+        esac
+        ;;
+      windows-cross)
+        if [[ $# -eq 2 ]]; then
+          shopt -s nullglob
+          linux_archive=$(select_archive dist/llvm-"${LLVM_VERSION}"-"${ABI}"-"${llvm_fingerprint}"-*.tar.zst)
+          windows_archive=$(select_archive dist/llvm-"${LLVM_VERSION}"-windows-x86_64-msvc-*.zip)
+        elif [[ $# -eq 4 ]]; then
+          linux_archive=$3
+          windows_archive=$4
+        else
+          usage; exit 2
+        fi
+        exec "$root/scripts/build-windows-cross" "$linux_archive" "$windows_archive"
+        ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  verify)
+    if [[ ${2:-} == --run ]]; then
+      [[ $# -eq 3 && "$3" == *-windows-cross-*.tar.zst ]] || { usage; exit 2; }
+      exec "$root/scripts/verify-windows-cross" --run "$3"
+    fi
+    [[ $# -eq 2 ]] || { usage; exit 2; }
+    if [[ "$2" == all ]]; then
+      shopt -s nullglob
+      llvm_archives=(dist/llvm-"${LLVM_VERSION}"-"${ABI}"-"${llvm_fingerprint}"-*.tar.zst)
+      lab_archives=(dist/lab-llvm-"${LLVM_VERSION}"-"${ABI}"-"${lab_fingerprint}"-*.tar.zst)
+      if [[ ${#llvm_archives[@]} -eq 0 || ${#lab_archives[@]} -eq 0 ]]; then
+        echo 'build both current archives before verifying all' >&2
+        exit 1
+      fi
+      for archive in "${llvm_archives[@]}" "${lab_archives[@]}"; do
+        "$root/scripts/verify-sdk" "$archive"
+      done
+    elif [[ "$2" == *-windows-cross-*.tar.zst ]]; then
+      exec "$root/scripts/verify-windows-cross" "$2"
+    else
+      exec "$root/scripts/verify-sdk" "$2"
+    fi
+    ;;
+  list)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    shopt -s nullglob
+    archives=(dist/*.tar.zst dist/*.zip dist/*.sha256)
+    if [[ ${#archives[@]} -gt 0 ]]; then ls -lh -- "${archives[@]}"; fi
+    ;;
+  *) usage; exit 2 ;;
+esac

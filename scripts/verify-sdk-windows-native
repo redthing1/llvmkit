@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build entirely with Linux executables. --run uses Wine only after linking.
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+: "${LLVM_SDK:?Set LLVM_SDK to the extracted Windows LLVM SDK}"
+: "${LLVM_NATIVE_TOOLCHAIN:?Set LLVM_NATIVE_TOOLCHAIN to the extracted Linux LLVM SDK}"
+: "${WINDOWS_SYSROOT:?Set WINDOWS_SYSROOT to an xwin default-layout sysroot}"
+run=0
+if [[ ${1:-} == --run ]]; then
+  run=1
+  shift
+fi
+if (( $# > 1 )); then
+  echo 'usage: verify-sdk-windows-native [--run] [OUTPUT_DIRECTORY]' >&2
+  exit 2
+fi
+output=${1:-"$root/.cache/native-windows-verify"}
+mkdir -p -- "$output"
+output=$(cd -- "$output" && pwd -P)
+sdk=$(cd -- "$LLVM_SDK" && pwd -P)
+native=$(cd -- "$LLVM_NATIVE_TOOLCHAIN" && pwd -P)
+major=$(tr -d '\r\n' < "$sdk/share/llvmkit/llvm-major")
+
+cmake -S "$root/tests/plugins" -B "$output/plugin" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$root/consumer/toolchain-windows-native.cmake"
+cmake --build "$output/plugin" --parallel 2 --verbose
+plugin="$output/plugin/LLVMKitPasses.dll"
+"$native/bin/llvm-readobj" --coff-imports "$plugin" > "$output/imports.txt"
+grep -q "LLVM-$major.dll" "$output/imports.txt"
+"$native/bin/llvm-readobj" --coff-exports "$plugin" > "$output/exports.txt"
+grep -q llvmGetPassPluginInfo "$output/exports.txt"
+cmake -S "$root/tests/consumer" -B "$output/consumer" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DLLVMKIT_WITH_LAB=OFF \
+  -DCMAKE_TOOLCHAIN_FILE="$root/consumer/toolchain-windows-native.cmake"
+cmake --build "$output/consumer" --parallel 2 --verbose
+echo 'Linux-native Windows build passed: plugin DLL, LLVM import, plugin export, CMake consumer.'
+if (( ! run )); then
+  exit 0
+fi
+
+exec "$root/tests/plugins/windows-runtime-smoke.sh" "$sdk" "$plugin" \
+  "$output/consumer/llvm_consumer.exe" "$root/tests/plugins" "$output"

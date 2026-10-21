@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+archive=$(realpath "${1:?expected SDK archive}")
+archive_dir=$(dirname "$archive")
+archive_name=$(basename "$archive")
+case "$archive_name" in
+  llvm-*.tar.zst) kind=llvm ;;
+  lab-*.tar.zst) kind=lab ;;
+  *) echo "not a llvmkit SDK archive: $archive_name" >&2; exit 2 ;;
+esac
+
+(cd "$archive_dir" && sha256sum -c "${archive_name}.sha256")
+mkdir -p "$root/.cache"
+scratch=$(mktemp -d "$root/.cache/verify.XXXXXX")
+trap 'rm -r -- "$scratch"' EXIT
+
+for distro in Alma Ubuntu Debian; do
+  podman build --layers -q \
+    -f "$root/tests/containers/${distro}.Dockerfile" \
+    -t "localhost/llvmkit-verify-${distro,,}" "$root/tests/containers" >/dev/null
+done
+
+# Preserve host ownership; access bind mounts without relabeling the checkout.
+podman run --rm --userns=keep-id --security-opt label=disable \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$archive_dir,dst=/input,readonly" \
+  --mount "type=bind,src=$scratch,dst=/output" \
+  localhost/llvmkit-verify-alma \
+  tar --zstd -xf "/input/$archive_name" -C /output
+
+# This detects install-tree paths that would silently send consumers back to
+# the build container. Relocating to /sdk also exercises runtime lookup.
+cmake_dirs=()
+for candidate in "$scratch/sdk/lib/cmake" "$scratch/sdk/lib64/cmake"; do
+  [[ ! -d "$candidate" ]] || cmake_dirs+=("$candidate")
+done
+if [[ ${#cmake_dirs[@]} -gt 0 ]] \
+   && grep -RnE --include='*.cmake' '/opt/llvmkit|/work/' "${cmake_dirs[@]}"; then
+  echo "SDK CMake files retain build paths" >&2
+  exit 1
+fi
+
+if [[ "$kind" == lab ]]; then
+  test -s "$scratch/sdk/share/licenses/ghidra/LICENSE"
+  test -s "$scratch/sdk/share/licenses/ghidra/NOTICE"
+  test -s "$scratch/sdk/share/licenses/lief/LICENSE"
+  grep -Eq '^ghidra [0-9a-f]{40}$' \
+    "$scratch/sdk/share/llvmkit/dependency-commits.txt"
+fi
+
+for distro in alma ubuntu debian; do
+  echo "Checking $kind SDK on $distro"
+  podman run --rm --security-opt label=disable \
+    --mount "type=bind,src=$scratch/sdk,dst=/sdk,readonly" \
+    --mount "type=bind,src=$root/tests/consumer,dst=/tests/consumer,readonly" \
+    --mount "type=bind,src=$root/tests/plugins,dst=/tests/plugins,readonly" \
+    "localhost/llvmkit-verify-$distro" \
+    bash /tests/consumer/smoke.sh "$kind"
+done

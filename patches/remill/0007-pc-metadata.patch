@@ -1,0 +1,37 @@
+diff --git a/lib/BC/TraceLifter.cpp b/lib/BC/TraceLifter.cpp
+index f4a4dbb..3323b34 100644
+--- a/lib/BC/TraceLifter.cpp
++++ b/lib/BC/TraceLifter.cpp
+@@ -18,2 +18,4 @@
++#include <llvm/IR/Constants.h>
+ #include <llvm/IR/Instructions.h>
++#include <llvm/IR/Metadata.h>
+ #include <remill/Arch/Instruction.h>
+@@ -24,2 +26,3 @@
++#include <cstdlib>
+ #include <map>
+ #include <set>
+@@ -243,2 +246,5 @@
+     uint64_t addr, std::function<void(uint64_t, llvm::Function *)> callback) {
++  const bool add_pc_metadata =
++      std::getenv("REMILL_PC_METADATA") != nullptr;
++
+   // Reset the lifting state.
+@@ -669,2 +675,17 @@
++    // Expose each PC-indexed instruction block's guest address to callback
++    // consumers.
++    if (add_pc_metadata) {
++      const auto pc_type = llvm::Type::getInt64Ty(context);
++      for (const auto &[pc, pc_block] : blocks) {
++        if (auto *terminator = pc_block->getTerminator()) {
++          llvm::Metadata *operands[] = {
++              llvm::ConstantAsMetadata::get(
++                  llvm::ConstantInt::get(pc_type, pc))};
++          terminator->setMetadata("remill.pc",
++                                  llvm::MDNode::get(context, operands));
++        }
++      }
++    }
++
+     callback(trace_addr, func);
+     manager.SetLiftedTraceDefinition(trace_addr, func);

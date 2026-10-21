@@ -1,0 +1,38 @@
+diff --git a/lib/BC/Util.cpp b/lib/BC/Util.cpp
+index dd02c75..8df53b5 100644
+--- a/lib/BC/Util.cpp
++++ b/lib/BC/Util.cpp
+@@ -17,6 +17,7 @@
+ #include <gflags/gflags.h>
+ #include <glog/logging.h>
+ 
++#include <cstdlib>
+ #include <filesystem>
+ #include <sstream>
+ #include <system_error>
+@@ -597,7 +598,12 @@ namespace {
+ using paths_t = std::vector<std::filesystem::path>;
+ 
+ const paths_t &DefaultSemanticsSearchPaths() {
+-  static const paths_t paths = {
++  static const paths_t paths = [] {
++    paths_t result;
++    if (const char *dir = std::getenv("REMILL_SEMANTICS_DIR")) {
++      if (*dir) result.emplace_back(dir);
++    }
++    const paths_t defaults = {
+       REMILL_BUILD_SEMANTICS_DIR_X86,
+       REMILL_BUILD_SEMANTICS_DIR_AARCH32,
+       REMILL_BUILD_SEMANTICS_DIR_AARCH64,
+@@ -608,7 +614,10 @@ const paths_t &DefaultSemanticsSearchPaths() {
+       "/usr/local/share/remill/" MAJOR_MINOR "/semantics",
+       "/usr/share/remill/" MAJOR_MINOR "/semantics",
+       "/share/remill/" MAJOR_MINOR "/semantics",
+-  };
++    };
++    result.insert(result.end(), defaults.begin(), defaults.end());
++    return result;
++  }();
+   return paths;
+ }
+ 

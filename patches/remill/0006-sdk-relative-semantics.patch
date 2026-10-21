@@ -1,0 +1,32 @@
+diff --git a/lib/BC/Util.cpp b/lib/BC/Util.cpp
+index 8df53b5..2ec84c5 100644
+--- a/lib/BC/Util.cpp
++++ b/lib/BC/Util.cpp
+@@ -26,6 +26,7 @@
+ #include <vector>
+ 
+ #ifndef _WIN32
++#  include <dlfcn.h>
+ #  include <sys/stat.h>
+ #  include <unistd.h>
+ #endif  // _WIN32
+@@ -603,6 +604,19 @@ const paths_t &DefaultSemanticsSearchPaths() {
+     if (const char *dir = std::getenv("REMILL_SEMANTICS_DIR")) {
+       if (*dir) result.emplace_back(dir);
+     }
++#ifndef _WIN32
++    // libLLVM is shipped beside Remill. Its loaded path also identifies the
++    // SDK when this static library is linked into a separate project's binary.
++    Dl_info llvm_info{};
++    if (void *version = dlsym(RTLD_DEFAULT, "LLVMGetVersion");
++        version && dladdr(version, &llvm_info) && llvm_info.dli_fname) {
++      const std::filesystem::path library(llvm_info.dli_fname);
++      if (library.is_absolute()) {
++        result.emplace_back(library.parent_path().parent_path() / "share" /
++                            "remill" / S(LLVM_VERSION_MAJOR) / "semantics");
++      }
++    }
++#endif
+     const paths_t defaults = {
+       REMILL_BUILD_SEMANTICS_DIR_X86,
+       REMILL_BUILD_SEMANTICS_DIR_AARCH32,

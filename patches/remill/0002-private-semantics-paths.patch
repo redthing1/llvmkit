@@ -1,0 +1,51 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f9878c6..8478c5a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -215,16 +215,6 @@ else()
+   endif()
+ endif()
+ 
+-target_compile_definitions(remill_settings INTERFACE
+-  "REMILL_INSTALL_SEMANTICS_DIR=\"${REMILL_INSTALL_SEMANTICS_DIR}\""
+-  "REMILL_BUILD_SEMANTICS_DIR_X86=\"${REMILL_BUILD_SEMANTICS_DIR_X86}\""
+-  "REMILL_BUILD_SEMANTICS_DIR_AARCH32=\"${REMILL_BUILD_SEMANTICS_DIR_AARCH32}\""
+-  "REMILL_BUILD_SEMANTICS_DIR_AARCH64=\"${REMILL_BUILD_SEMANTICS_DIR_AARCH64}\""
+-  "REMILL_BUILD_SEMANTICS_DIR_SPARC32=\"${REMILL_BUILD_SEMANTICS_DIR_SPARC32}\""
+-  "REMILL_BUILD_SEMANTICS_DIR_SPARC64=\"${REMILL_BUILD_SEMANTICS_DIR_SPARC64}\""
+-  "REMILL_BUILD_SEMANTICS_DIR_PPC64_32ADDR=\"${REMILL_BUILD_SEMANTICS_DIR_PPC64_32ADDR}\""
+-)
+-
+ if(REMILL_FETCH_SLEIGH)
+   if(SLEIGH_EXECUTABLE)
+     set(sleigh_compiler "${SLEIGH_EXECUTABLE}")
+diff --git a/lib/BC/CMakeLists.txt b/lib/BC/CMakeLists.txt
+index 224d0e0..2f5ea5d 100644
+--- a/lib/BC/CMakeLists.txt
++++ b/lib/BC/CMakeLists.txt
+@@ -35,6 +35,18 @@ add_library(remill_bc STATIC
+   Util.cpp
+ )
+ 
++# These paths are implementation details of remill_bc. Exporting them through
++# remill_settings would bind installed CMake consumers to the build machine.
++target_compile_definitions(remill_bc PRIVATE
++  "REMILL_INSTALL_SEMANTICS_DIR=\"${REMILL_INSTALL_SEMANTICS_DIR}\""
++  "REMILL_BUILD_SEMANTICS_DIR_X86=\"${REMILL_BUILD_SEMANTICS_DIR_X86}\""
++  "REMILL_BUILD_SEMANTICS_DIR_AARCH32=\"${REMILL_BUILD_SEMANTICS_DIR_AARCH32}\""
++  "REMILL_BUILD_SEMANTICS_DIR_AARCH64=\"${REMILL_BUILD_SEMANTICS_DIR_AARCH64}\""
++  "REMILL_BUILD_SEMANTICS_DIR_SPARC32=\"${REMILL_BUILD_SEMANTICS_DIR_SPARC32}\""
++  "REMILL_BUILD_SEMANTICS_DIR_SPARC64=\"${REMILL_BUILD_SEMANTICS_DIR_SPARC64}\""
++  "REMILL_BUILD_SEMANTICS_DIR_PPC64_32ADDR=\"${REMILL_BUILD_SEMANTICS_DIR_PPC64_32ADDR}\""
++)
++
+ target_include_directories(remill_bc AFTER PRIVATE "${REMILL_SOURCE_DIR}")
+ 
+ target_link_libraries(remill_bc PUBLIC
+@@ -46,4 +58,4 @@ if(REMILL_ENABLE_INSTALL_TARGET)
+     TARGETS remill_bc
+     EXPORT remillTargets
+   )
+-endif()
+\ No newline at end of file
++endif()
